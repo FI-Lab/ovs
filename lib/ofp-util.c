@@ -2337,6 +2337,113 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
     return msg;
 }
 
+struct ofpbuf*
+ofputil_encode_domain_set(enum ofp_version ofp_version,struct atctl_domain_set *domain){
+    struct ofpbuf *msg;
+    struct  ofp10_atctl_set *set;
+
+    msg = ofpraw_alloc(OFPRAW_OFPT10_DOMAIN_SET,ofp_version,0);
+    set = ofpbuf_put_zeros(msg,sizeof *set);
+    set->domain_counter = domain->domain_counter;
+    if(domain->domain_set & NW_SRC){
+	set->nw_src = 1;
+	set->nw_src_mask = domain->mask->nw_src_mask;
+    }
+    if(domain->domain_set & NW_DST){
+	set->nw_dst = 1;
+	set->nw_dst_mask = domain->mask->nw_dst_mask;
+    }
+    if(domain->domain_set & TP_SRC){
+	set->tp_src = 1;
+	set->tp_src_mask = domain->mask->tp_src_mask;
+    }
+    if(domain->domain_set & TP_DST){
+	set->tp_dst = 1;
+	set->tp_dst_mask = domain->mask->tp_dst_mask;
+    }
+    if(domain->domain_set & NW_PROTO){
+	set->nw_proto = 1;
+    }
+    printf("set:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",set->domain_counter,set->nw_src,set->nw_dst,set->tp_src,set->tp_dst,set->nw_proto, 
+	    set->nw_src_mask,set->nw_dst_mask,set->tp_src_mask,set->tp_dst_mask);
+    printf("%d%d\n",msg->size,msg->allocated);
+    ofpmsg_update_length(msg);
+    printf("%d%d\n",msg->size,msg->allocated);
+    return msg;
+}
+
+enum ofperr
+ofputil_decode_domain_set(struct atctl_domain_set *set_rule,const struct ofp_header *oh,
+	struct ofpbuf *ofpacts,enum ofputil_protocol ofproto){
+        enum ofperr error;
+	struct ofpbuf b;
+	enum ofpraw raw;
+	ofpbuf_use_const(&b, oh, ntohs(oh->length));
+	raw = ofpraw_pull_assert(&b);
+	if(raw == OFPRAW_OFPT10_DOMAIN_SET){
+	    struct  ofp10_atctl_set *set;
+	    set = ofpbuf_pull(&b,sizeof *set);
+	    set_rule->domain_counter = set->domain_counter;
+	    if(set->nw_src == 1){
+		set_rule->domain_counter |= NW_SRC;
+		set_rule->mask->nw_src_mask = set->nw_src_mask;
+	    }
+	    if(set->nw_dst == 1){
+		set_rule->domain_counter |= NW_DST;
+		set_rule->mask->nw_dst_mask = set->nw_dst_mask;
+	    }
+	    if(set->tp_src == 1){
+		set_rule->domain_counter |= TP_SRC;
+		set_rule->mask->tp_src_mask = set->tp_src_mask;
+	    }
+	    if(set->tp_dst == 1){
+		set_rule->domain_counter |= TP_DST;
+		set_rule->mask->tp_dst_mask = set->tp_dst_mask;
+	    }
+	    if(set->nw_proto == 1)
+		set_rule->domain_counter |= NW_PROTO;
+	}
+}
+
+/*convert atctl rule into ofpbuf*/
+struct ofpbuf*
+ofputil_encode_atctl_rule(struct ofputil_atctl_rule *rule,enum ofputil_protocol usable_protocols){
+    struct ofpbuf *msg;
+    enum ofp_version version = ofputil_protocol_to_ofp_version(usable_protocols);
+    struct ofp10_atctl_add *add_rule;
+
+    msg = ofpraw_alloc(OFPRAW_OFPT10_ADD_RULE,version,rule->ofpacts_len);
+    add_rule = ofpbuf_put_zeros(msg,sizeof *add_rule);
+    ofputil_match_to_ofp10_match(&rule->match_rule,&add_rule);
+    ofpacts_put_openflow_actions(rule->ofpacts, rule->ofpacts_len, msg, version);
+    ofpmsg_update_length(msg);
+    return msg;
+}
+
+enum ofperr
+ofputil_decode_atctl_rule(struct ofputil_atctl_rule *add_rule,const struct ofp_header *oh,
+	struct ofpbuf *ofpacts,enum ofputil_protocol ofproto){
+    enum ofperr error;
+    struct ofpbuf b;
+    enum ofpraw raw;
+    ofpbuf_use_const(&b, oh, ntohs(oh->length));
+    raw = ofpraw_pull_assert(&b);
+    if(raw == OFPRAW_OFPT10_ADD_RULE){
+	struct ofp10_atctl_add *new_rule;
+	new_rule = ofpbuf_pull(&b,sizeof *new_rule);
+	ofputil_match_from_ofp10_match(&new_rule->match,&add_rule->match_rule);
+	ofputil_normalize_match(&add_rule->match_rule);
+	error =  ofpacts_pull_openflow_instructions(&b, b.size, oh->version, ofpacts);
+	if(error)
+	    return error;
+
+	add_rule->ofpacts = ofpacts->data;
+	add_rule->ofpacts_len = ofpacts->size;
+    }
+
+}
+
+
 static enum ofperr
 ofputil_decode_ofpst10_flow_request(struct ofputil_flow_stats_request *fsr,
                                     const struct ofp10_flow_stats_request *ofsr,

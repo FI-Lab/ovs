@@ -385,8 +385,13 @@ usage(void)
            "SWITCH or TARGET is an active OpenFlow connection method.\n"
            "\nOther commands:\n"
            "  ofp-parse FILE              print messages read from FILE\n"
-           "  ofp-parse-pcap PCAP         print OpenFlow read from PCAP\n",
-           program_name, program_name);
+           "  ofp-parse-pcap PCAP         print OpenFlow read from PCAP\n"
+
+	   "  atctl-domain SWITCH COUNT DOMAINS MASKS   add atctl table\n"
+	   "  atctl-add SWITCH RULE                     add atctl table rule\n"
+	   "  atctl-del SWITCH RULE                     delete atctl table tule\n"
+	   "  atctl-dump SWITCH                         print the atclt table rules\n",
+    program_name, program_name);
     vconn_usage(true, false, false);
     daemon_usage();
     ofp_version_usage();
@@ -1971,6 +1976,102 @@ ofctl_ofp_parse(struct ovs_cmdl_context *ctx)
     if (file != stdin) {
         fclose(file);
     }
+}
+
+/*functions of atctl_table*/
+static void
+atctl_domain_set_func(struct ovs_cmdl_context *ctx)
+{
+    const char* vconn_name = ctx->argv[1];
+    struct vconn *vconn;
+    enum ofp_version version;
+    struct ofpbuf *set_domains;
+    struct atctl_domain_set *set_rule = xmalloc(sizeof *set_rule);
+    set_rule->mask = xmalloc(sizeof set_rule->mask);
+    char* save_ptr = NULL;
+    char* domain_str = ctx->argv[3];
+    char* str = strtok_r(domain_str,",",&save_ptr);
+   
+    set_rule->domain_counter = atoi(ctx->argv[2]);
+    set_rule->domain_set= NW_SRC & NW_DST & TP_SRC & TP_DST & NW_PROTO;
+    while(str){
+	//printf("%s\n",str);
+	if(strcmp(str,"NW_SRC") == 0){
+	    set_rule->domain_set |= NW_SRC;
+	}
+	else if(strcmp(str,"NW_DST") == 0)
+	    set_rule->domain_set |= NW_DST;
+	else if(strcmp(str,"TP_SRC") == 0)
+	    set_rule->domain_set |= TP_SRC;
+	else if(strcmp(str,"TP_DST") == 0)
+	    set_rule->domain_set |= TP_DST;
+	else if(strcmp(str,"NW_PROTO") == 0)
+	    set_rule->domain_set |= NW_PROTO;
+	else{
+	    abort();
+	}		
+	str = strtok_r(NULL,",",&save_ptr);
+    }
+    char* save_ptr2 = NULL;
+    char* mask_str = ctx->argv[4];
+    char* str2 = strtok_r(mask_str,",",&save_ptr2);
+    while(str2){
+	//printf("%s\n",str2);
+	if(set_rule->domain_set & NW_SRC)
+	    set_rule->mask->nw_src_mask = atoi(str2);
+	else if(set_rule->domain_set & NW_DST)
+	    set_rule->mask->nw_dst_mask = atoi(str2);
+	else if(set_rule->domain_set & TP_SRC)
+	    set_rule->mask->tp_src_mask = atoi(str2);
+	else if(set_rule->domain_set & TP_DST)
+	    set_rule->mask->tp_dst_mask = atoi(str2);
+	else if(set_rule->domain_set & NW_PROTO)
+	    set_rule->mask->proto_mask = atoi(str2);
+	else{
+	    abort();
+	}
+	str2 = strtok_r(NULL,",",&save_ptr2);
+    }
+    open_vconn(vconn_name, &vconn);
+    version = vconn_get_version(vconn);
+    set_domains = ofputil_encode_domain_set(version,set_rule);
+    printf("hehe1\n");
+    if(set_domains)
+	transact_noreply(vconn, set_domains);
+    //dump_transaction(vconn,set_domains)
+     printf("hehe2\n");
+     vconn_close(vconn); 
+}
+static void
+atctl_rule_mod__(char *remote,struct ofputil_atctl_rule *rule,
+	size_t n_rules,enum ofputil_protocol usable_protocols){
+    enum ofputil_protocol protocol;
+    struct vconn *vconn;
+    struct ofpbuf *add_rule;
+
+    protocol = open_vconn_for_flow_mod(remote, &vconn, usable_protocols);
+    add_rule = ofputil_encode_atctl_rule(rule,protocol);
+    transact_noreply(vconn,add_rule);
+    vconn_close(vconn);
+}
+
+static void
+atctl_rule_mod(int argc, char *argv[],uint16_t command){
+    char *error;
+    enum ofputil_protocol usable_protocols;
+    struct ofputil_atctl_rule *rule;
+    char *string = argv[2];
+    error = atctl_rule_parse(&rule, string, command, &usable_protocols);
+    if (error) {
+	ovs_fatal(0, "%s", error);
+    }
+    atctl_rule_mod__(argv[1], &rule, 1, usable_protocols);
+}
+
+
+static void
+atctl_add_rule(struct ovs_cmdl_context *ctx){
+            atctl_rule_mod(ctx->argc,ctx->argv,ATCTL_ADD);
 }
 
 static bool
@@ -3626,6 +3727,11 @@ static const struct ovs_cmdl_command all_commands[] = {
       1, 1, ofctl_ofp_parse },
     { "ofp-parse-pcap", "pcap",
       1, INT_MAX, ofctl_ofp_parse_pcap },
+
+    { "atctl-domain","switch",
+      4, 4, atctl_domain_set_func},
+    { "atctl-add", "switch",
+      2, 2, atctl_add_rule},
 
     { "add-group", "switch group",
       1, 2, ofctl_add_group },

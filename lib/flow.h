@@ -354,10 +354,20 @@ bool flow_hash_fields_valid(enum nx_hash_fields);
 uint32_t flow_hash_in_wildcards(const struct flow *,
                                 const struct flow_wildcards *,
                                 uint32_t basis);
+enum set_domain_match{
+    NW_SRC = 1 << 0,
+    NW_DST = 1 << 1,
+    TP_SRC = 1 << 2,
+    TP_DST = 1 << 3,
+    NW_PROTO = 1 << 4
+};
+uint32_t atctl_flow_hash(const struct flow *flow,const struct flow_wildcards *wc,enum set_domain_match domain_match,uint32_t basis);
+
 
 bool flow_equal_except(const struct flow *a, const struct flow *b,
                        const struct flow_wildcards *);
-
+
+
 /* Compressed flow. */
 
 /* Number of 64-bit words present in struct miniflow. */

@@ -70,6 +70,9 @@ COVERAGE_DEFINE(ofproto_recv_openflow);
 COVERAGE_DEFINE(ofproto_reinit_ports);
 COVERAGE_DEFINE(ofproto_update_port);
 
+extern struct atctl_domain_set set_domain_rule;
+extern struct cmap atctl_table;
+
 /* Default fields to use for prefix tries in each flow table, unless something
  * else is configured. */
 const enum mf_field_id default_prefix_fields[2] =
@@ -6918,6 +6921,62 @@ handle_bundle_add(struct ofconn *ofconn, const struct ofp_header *oh)
 }
 
 static enum ofperr
+handle_atctl_set(struct ofconn *ofconn, const struct ofp_header *oh)
+    OVS_EXCLUDED(ofproto_mutex){
+	printf("handle\n");
+	struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+	struct ofpbuf ofpacts;
+	uint64_t ofpacts_stub[1024 / 8];
+	enum ofperr error;
+
+	error = reject_slave_controller(ofconn);
+	if (error) {
+	    goto exit;
+	}
+
+	ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
+	error = ofputil_decode_domain_set(&set_domain_rule,oh,&ofpacts,ofproto);
+	cmap_init(&atctl_table);
+	ofconn_report_flow_mod(ofconn, set_domain_rule.command);
+
+exit:
+	return error;
+    }
+
+
+static enum ofperr
+handle_atctl_add(struct ofconn *ofconn, const struct ofp_header *oh)
+    OVS_EXCLUDED(ofproto_mutex){
+	struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+	struct ofputil_atctl_rule *add_rule;
+	struct ofpbuf ofpacts;
+	uint64_t ofpacts_stub[1024 / 8];
+	enum ofperr error;
+
+	error = reject_slave_controller(ofconn);
+	if (error) {
+	    goto exit;
+	}
+
+	ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
+	error = ofputil_decode_atctl_rule(add_rule,oh,&ofpacts,ofproto);
+
+	if (!error) {
+	    error = ofproto_check_ofpacts(ofproto, add_rule->ofpacts, add_rule->ofpacts_len);
+	}
+
+	if (!error){
+	    uint32_t hash = atctl_flow_hash(&add_rule->match_rule.flow,&add_rule->match_rule.wc,set_domain_rule.domain_set,1);
+	    cmap_insert(&atctl_table,CONST_CAST(struct cmap_node *,&add_rule->node),hash);
+	}
+	//ofconn_report_flow_mod(ofconn, add_rule.command);
+exit:
+   return error;
+  
+    }
+							
+
+static enum ofperr
 handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     OVS_EXCLUDED(ofproto_mutex)
 {
@@ -7087,6 +7146,11 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_METER_FEATURES_STATS_REPLY:
     case OFPTYPE_TABLE_FEATURES_STATS_REPLY:
     case OFPTYPE_ROLE_STATUS:
+    case OFPTYPE_DOMAIN_SET:            
+	return handle_atctl_set(ofconn,oh);     
+    case OFPTYPE_ADD_RULE:          
+	return handle_atctl_add(ofconn,oh);
+
     default:
         if (ofpmsg_is_stat_request(oh)) {
             return OFPERR_OFPBRC_BAD_STAT;

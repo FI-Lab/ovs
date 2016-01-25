@@ -31,10 +31,12 @@
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
 #include "type-props.h"
+#include "cmap.h"
 
 struct ofpbuf;
 union ofp_action;
 struct ofpact_set_field;
+enum set_domain_match;
 
 /* Port numbers. */
 enum ofperr ofputil_port_from_ofp11(ovs_be32 ofp11_port,
@@ -315,6 +317,13 @@ struct ofputil_flow_mod {
 
     /* Reason for delete; ignored for non-delete commands */
     enum ofp_flow_removed_reason delete_reason;
+};
+/*define the atctl table rule structure*/
+struct ofputil_atctl_rule{
+    struct cmap_node node;
+    struct match match_rule;
+    struct ofpact *ofpacts;
+    size_t ofpacts_len;
 };
 
 enum ofperr ofputil_decode_flow_mod(struct ofputil_flow_mod *,
@@ -1125,4 +1134,19 @@ struct ofpbuf *ofputil_encode_bundle_add(enum ofp_version ofp_version,
 enum ofperr ofputil_decode_bundle_add(const struct ofp_header *,
                                       struct ofputil_bundle_add_msg *,
                                       enum ofptype *type);
+struct domain_mask{
+    uint8_t nw_src_mask;
+    uint8_t nw_dst_mask;
+    uint8_t tp_src_mask;
+    uint8_t tp_dst_mask;
+    uint8_t proto_mask;
+};
+
+struct atctl_domain_set{
+    int command;
+    int domain_counter;
+    enum set_domain_match domain_set;
+    struct domain_mask *mask;
+};
+
 #endif /* ofp-util.h */

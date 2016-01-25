@@ -390,6 +390,12 @@ enum ofpraw {
     OFPRAW_OFPST14_FLOW_MONITOR_REPLY,
     /* NXST 1.0 (2): uint8_t[8][]. */
     OFPRAW_NXST_FLOW_MONITOR_REPLY,
+    
+    /*OFPT 1.0 (35): struct ofp10_atctl_set. */
+    OFPRAW_OFPT10_DOMAIN_SET,
+    /*OFPT 1.0 (36): struct ofp10_atctl_add. */
+    OFPRAW_OFPT10_ADD_RULE,
+
 
 /* Nicira extension messages.
  *
@@ -613,6 +619,8 @@ enum ofptype {
                                          * OFPRAW_NXST_FLOW_MONITOR_REQUEST. */
     OFPTYPE_FLOW_MONITOR_STATS_REPLY,   /* OFPRAW_OFPST14_FLOW_MONITOR_REPLY.
                                          * OFPRAW_NXST_FLOW_MONITOR_REPLY. */
+    OFPTYPE_DOMAIN_SET,                 /* OFPRAW_OFPT10_DOMAIN_SET. */
+    OFPTYPE_ADD_RULE,                   /* OFPRAW_OFPT10_ADD_RULE. */
 
     /* Nicira extensions. */
     OFPTYPE_SET_FLOW_FORMAT,      /* OFPRAW_NXT_SET_FLOW_FORMAT. */

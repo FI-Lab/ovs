@@ -254,6 +254,30 @@ OFP_ASSERT(sizeof(struct ofp10_match) == 40);
 enum ofp10_flow_mod_flags {
     OFPFF10_EMERG       = 1 << 2 /* Part of "emergency flow cache". */
 };
+struct ofp10_atctl_set{
+    uint8_t domain_counter;
+    uint8_t nw_src;
+    uint8_t nw_dst;
+    uint8_t tp_src;
+    uint8_t tp_dst;
+    uint8_t nw_proto;
+    uint8_t nw_src_mask;
+    uint8_t nw_dst_mask;
+    uint8_t tp_src_mask;
+    uint8_t tp_dst_mask;
+    uint8_t pad[2];
+};
+
+OFP_ASSERT(sizeof(struct ofp10_atctl_set) == 12);
+
+struct ofp10_atctl_add{
+    struct ofp10_match match;    /* Fields to match */
+    ovs_be16 command;             /* One of OFPFC_*. */
+    uint8_t pad[2];
+};
+
+OFP_ASSERT(sizeof(struct ofp10_atctl_add) == 44);
+
 
 /* Flow setup and teardown (controller -> datapath). */
 struct ofp10_flow_mod {

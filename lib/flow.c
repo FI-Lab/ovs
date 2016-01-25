@@ -1463,6 +1463,26 @@ flow_hash_in_wildcards(const struct flow *flow,
     return hash_finish(hash, 8 * FLOW_U64S);
 }
 
+uint32_t
+atctl_flow_hash(const struct flow *flow,const struct flow_wildcards *wc, enum set_domain_match domain_match,uint32_t basis){
+    uint32_t hash = basis;
+    if (flow) {
+	if(domain_match & NW_PROTO)
+	    hash = hash_add(hash, flow->nw_proto);
+	if(domain_match & NW_SRC)
+	    hash = hash_add(hash, (OVS_FORCE uint32_t) (flow->nw_src & wc->masks.nw_src));
+	if(domain_match & NW_DST)
+	    hash = hash_add(hash, (OVS_FORCE uint32_t) (flow->nw_src & wc->masks.nw_src));
+	if(domain_match & TP_SRC)
+	    hash = hash_add(hash, (OVS_FORCE ovs_be16) (flow->tp_src & wc->masks.tp_src));
+	if(domain_match & TP_DST)
+	    hash = hash_add(hash, (OVS_FORCE ovs_be16) (flow->tp_dst & wc->masks.tp_dst));
+	hash = hash_finish(hash, 42); /* Arbitrary number. */
+    }
+    return hash;
+}
+
+
 /* Sets the VLAN VID that 'flow' matches to 'vid', which is interpreted as an
  * OpenFlow 1.0 "dl_vlan" value:
  *
