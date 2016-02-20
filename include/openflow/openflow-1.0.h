@@ -254,6 +254,7 @@ OFP_ASSERT(sizeof(struct ofp10_match) == 40);
 enum ofp10_flow_mod_flags {
     OFPFF10_EMERG       = 1 << 2 /* Part of "emergency flow cache". */
 };
+
 struct ofp10_atctl_set{
     uint8_t domain_counter;
     uint8_t nw_src;

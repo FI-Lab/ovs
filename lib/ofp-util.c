@@ -2347,19 +2347,19 @@ ofputil_encode_domain_set(enum ofp_version ofp_version,struct atctl_domain_set *
     set->domain_counter = domain->domain_counter;
     if(domain->domain_set & NW_SRC){
 	set->nw_src = 1;
-	set->nw_src_mask = domain->mask->nw_src_mask;
+	set->nw_src_mask = domain->mask.nw_src_mask;
     }
     if(domain->domain_set & NW_DST){
 	set->nw_dst = 1;
-	set->nw_dst_mask = domain->mask->nw_dst_mask;
+	set->nw_dst_mask = domain->mask.nw_dst_mask;
     }
     if(domain->domain_set & TP_SRC){
 	set->tp_src = 1;
-	set->tp_src_mask = domain->mask->tp_src_mask;
+	set->tp_src_mask = domain->mask.tp_src_mask;
     }
     if(domain->domain_set & TP_DST){
 	set->tp_dst = 1;
-	set->tp_dst_mask = domain->mask->tp_dst_mask;
+	set->tp_dst_mask = domain->mask.tp_dst_mask;
     }
     if(domain->domain_set & NW_PROTO){
 	set->nw_proto = 1;
@@ -2386,19 +2386,19 @@ ofputil_decode_domain_set(struct atctl_domain_set *set_rule,const struct ofp_hea
 	    set_rule->domain_counter = set->domain_counter;
 	    if(set->nw_src == 1){
 		set_rule->domain_counter |= NW_SRC;
-		set_rule->mask->nw_src_mask = set->nw_src_mask;
+		set_rule->mask.nw_src_mask = set->nw_src_mask;
 	    }
 	    if(set->nw_dst == 1){
 		set_rule->domain_counter |= NW_DST;
-		set_rule->mask->nw_dst_mask = set->nw_dst_mask;
+		set_rule->mask.nw_dst_mask = set->nw_dst_mask;
 	    }
 	    if(set->tp_src == 1){
 		set_rule->domain_counter |= TP_SRC;
-		set_rule->mask->tp_src_mask = set->tp_src_mask;
+		set_rule->mask.tp_src_mask = set->tp_src_mask;
 	    }
 	    if(set->tp_dst == 1){
 		set_rule->domain_counter |= TP_DST;
-		set_rule->mask->tp_dst_mask = set->tp_dst_mask;
+		set_rule->mask.tp_dst_mask = set->tp_dst_mask;
 	    }
 	    if(set->nw_proto == 1)
 		set_rule->domain_counter |= NW_PROTO;

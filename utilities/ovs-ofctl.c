@@ -1987,7 +1987,7 @@ atctl_domain_set_func(struct ovs_cmdl_context *ctx)
     enum ofp_version version;
     struct ofpbuf *set_domains;
     struct atctl_domain_set *set_rule = xmalloc(sizeof *set_rule);
-    set_rule->mask = xmalloc(sizeof set_rule->mask);
+    //set_rule->mask = xmalloc(sizeof set_rule->mask);
     char* save_ptr = NULL;
     char* domain_str = ctx->argv[3];
     char* str = strtok_r(domain_str,",",&save_ptr);
@@ -2018,15 +2018,15 @@ atctl_domain_set_func(struct ovs_cmdl_context *ctx)
     while(str2){
 	//printf("%s\n",str2);
 	if(set_rule->domain_set & NW_SRC)
-	    set_rule->mask->nw_src_mask = atoi(str2);
+	    set_rule->mask.nw_src_mask = atoi(str2);
 	else if(set_rule->domain_set & NW_DST)
-	    set_rule->mask->nw_dst_mask = atoi(str2);
+	    set_rule->mask.nw_dst_mask = atoi(str2);
 	else if(set_rule->domain_set & TP_SRC)
-	    set_rule->mask->tp_src_mask = atoi(str2);
+	    set_rule->mask.tp_src_mask = atoi(str2);
 	else if(set_rule->domain_set & TP_DST)
-	    set_rule->mask->tp_dst_mask = atoi(str2);
+	    set_rule->mask.tp_dst_mask = atoi(str2);
 	else if(set_rule->domain_set & NW_PROTO)
-	    set_rule->mask->proto_mask = atoi(str2);
+	    set_rule->mask.proto_mask = atoi(str2);
 	else{
 	    abort();
 	}

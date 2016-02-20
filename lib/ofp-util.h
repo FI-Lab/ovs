@@ -1146,7 +1146,7 @@ struct atctl_domain_set{
     int command;
     int domain_counter;
     enum set_domain_match domain_set;
-    struct domain_mask *mask;
+    struct domain_mask mask;
 };
 
 #endif /* ofp-util.h */
