@@ -2039,39 +2039,42 @@ atctl_domain_set_func(struct ovs_cmdl_context *ctx)
     if(set_domains)
 	transact_noreply(vconn, set_domains);
     //dump_transaction(vconn,set_domains)
-     printf("hehe2\n");
-     vconn_close(vconn); 
+    printf("hehe2\n");
+    vconn_close(vconn); 
 }
 static void
-atctl_rule_mod__(char *remote,struct ofputil_atctl_rule *rule,
-	size_t n_rules,enum ofputil_protocol usable_protocols){
+at_rule_mod__(char *remote, struct ofputil_at_rule_mod *am,
+	size_t n_rules,enum ofputil_protocol usable_protocols)
+{
     enum ofputil_protocol protocol;
     struct vconn *vconn;
-    struct ofpbuf *add_rule;
+    struct ofpbuf *msg;
 
     protocol = open_vconn_for_flow_mod(remote, &vconn, usable_protocols);
-    add_rule = ofputil_encode_atctl_rule(rule,protocol);
-    transact_noreply(vconn,add_rule);
+    msg = ofputil_encode_at_rule_mod(am, protocol);
+    transact_noreply(vconn, msg);
     vconn_close(vconn);
 }
 
 static void
-atctl_rule_mod(int argc, char *argv[],uint16_t command){
+at_rule_mod(int argc, char *argv[], uint16_t command)
+{
     char *error;
     enum ofputil_protocol usable_protocols;
-    struct ofputil_atctl_rule *rule;
+    struct ofputil_at_rule_mod am;
     char *string = argv[2];
-    error = atctl_rule_parse(&rule, string, command, &usable_protocols);
+    error = at_rule_parse(&am, string, command, &usable_protocols);
     if (error) {
-	ovs_fatal(0, "%s", error);
+        ovs_fatal(0, "%s", error);
     }
-    atctl_rule_mod__(argv[1], &rule, 1, usable_protocols);
+    at_rule_mod__(argv[1], &am, 1, usable_protocols);
 }
 
 
 static void
-atctl_add_rule(struct ovs_cmdl_context *ctx){
-            atctl_rule_mod(ctx->argc,ctx->argv,ATCTL_ADD);
+atctl_add_rule(struct ovs_cmdl_context *ctx)
+{
+    at_rule_mod(ctx->argc, ctx->argv, OFPFC_ATCTL_ADD);
 }
 
 static bool
@@ -3730,7 +3733,7 @@ static const struct ovs_cmdl_command all_commands[] = {
 
     { "atctl-domain","switch",
       4, 4, atctl_domain_set_func},
-    { "atctl-add", "switch",
+    { "at-add-rule", "switch",
       2, 2, atctl_add_rule},
 
     { "add-group", "switch group",

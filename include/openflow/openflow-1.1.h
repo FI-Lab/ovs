@@ -346,6 +346,19 @@ struct ofp11_flow_mod {
 };
 OFP_ASSERT(sizeof(struct ofp11_flow_mod) == 40);
 
+
+struct ofp11_at_rule_mod {
+    struct ofp11_match match;    /* Fields to match */
+    uint8_t command;             /* One of OFPFC_*. */
+    uint8_t table_id;
+    ovs_be16 priority;
+    ovs_be32 out_port;
+};
+
+OFP_ASSERT(sizeof(struct ofp11_at_rule_mod) == 96);
+
+
+
 /* Group types. Values in the range [128, 255] are reserved for experimental
  * use. */
 enum ofp11_group_type {

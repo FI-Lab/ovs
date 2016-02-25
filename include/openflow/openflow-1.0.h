@@ -271,15 +271,6 @@ struct ofp10_atctl_set{
 
 OFP_ASSERT(sizeof(struct ofp10_atctl_set) == 12);
 
-struct ofp10_atctl_add{
-    struct ofp10_match match;    /* Fields to match */
-    ovs_be16 command;             /* One of OFPFC_*. */
-    uint8_t pad[2];
-};
-
-OFP_ASSERT(sizeof(struct ofp10_atctl_add) == 44);
-
-
 /* Flow setup and teardown (controller -> datapath). */
 struct ofp10_flow_mod {
     struct ofp10_match match;    /* Fields to match */

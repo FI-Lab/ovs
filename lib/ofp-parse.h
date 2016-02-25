@@ -94,4 +94,9 @@ char *str_to_be64(const char *str, ovs_be64 *valuep) OVS_WARN_UNUSED_RESULT;
 char *str_to_mac(const char *str, uint8_t mac[ETH_ADDR_LEN]) OVS_WARN_UNUSED_RESULT;
 char *str_to_ip(const char *str, ovs_be32 *ip) OVS_WARN_UNUSED_RESULT;
 
+char * OVS_WARN_UNUSED_RESULT
+at_rule_parse(struct ofputil_at_rule_mod *am, char *string, 
+        uint16_t command, enum ofputil_protocol *usable_protocols);
+
+
 #endif /* ofp-parse.h */

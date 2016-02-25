@@ -89,7 +89,9 @@ static struct shash dp_netdevs OVS_GUARDED_BY(dp_netdev_mutex)
 static struct vlog_rate_limit upcall_rl = VLOG_RATE_LIMIT_INIT(600, 600);
 
 struct atctl_domain_set set_domain_rule;
-struct cmap atctl_table;
+
+//vector of algorithm tables
+struct pvector atables;
 
 /* Stores a miniflow with inline values */
 
@@ -143,7 +145,7 @@ struct emc_cache {
          (CURRENT_ENTRY) = &(EMC)->entries[srch_hash__ & EM_FLOW_HASH_MASK], \
          i__ < EM_FLOW_HASH_SEGS;                                            \
          i__++, srch_hash__ >>= EM_FLOW_HASH_SHIFT)
-
+
 /* Simple non-wildcarding single-priority classifier. */
 
 struct dpcls {
@@ -539,7 +541,7 @@ get_dp_netdev(const struct dpif *dpif)
 {
     return dpif_netdev_cast(dpif)->dp;
 }
-
+
 enum pmd_info_type {
     PMD_INFO_SHOW_STATS,  /* show how cpu cycles are spent */
     PMD_INFO_CLEAR_STATS  /* set the cycles count to 0 */
@@ -2455,7 +2457,6 @@ dpif_netdev_queue_to_priority(const struct dpif *dpif OVS_UNUSED,
     return 0;
 }
 
-
 /* Creates and returns a new 'struct dp_netdev_actions', whose actions are
  * a copy of the 'ofpacts_len' bytes of 'ofpacts'. */
 struct dp_netdev_actions *
@@ -3172,13 +3173,13 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
         miniflow_extract(packets[i], &key.mf);
         key.len = 0; /* Not computed yet. */
         key.hash = dpif_netdev_packet_get_rss_hash(packets[i], &key.mf);
-	
-	/*add a table before the emc cache*/
-	rule = atctl_find(&key.mf);
-	if(OVS_LIKELY(rule)){
-	    atctl_execute(rule,&packets[i],pmd);
-	    return -1;
-	}
+
+        /*at processing before the emc cache*/
+        rule = at_processing(&key);
+        if(OVS_LIKELY(rule)){
+            atctl_execute(rule,&packets[i],pmd);
+            return -1;
+        }
 
         flow = emc_lookup(flow_cache, &key);
         if (OVS_LIKELY(flow)) {
@@ -3944,6 +3945,7 @@ dpcls_lookup(const struct dpcls *cls, const struct netdev_flow_key keys[],
     }
     return false;                     /* Some misses. */
 }
+
 static bool
 atctl_equal(const struct flow *a,const struct flow *b,int domain_counter,enum set_domain_match domain_match){
     int not_equal = 0;
@@ -3986,31 +3988,41 @@ atctl_equal(const struct flow *a,const struct flow *b,int domain_counter,enum se
 	return 1;
 }
 
-static struct ofputil_atctl_rule  *
-atctl_find(struct miniflow *mf){
-    uint32_t hash;
-    const struct cmap_node *inode = NULL;
-    const struct ofputil_atctl_rule  *find_atctl_rule,*rule;
-    struct flow *flow;
-    struct match *match;
-    miniflow_expand(mf,flow);
-    /*
-     *In classifier.c, find_match_wc() use trie to get the subtalbe.
-     *We now use the genreal way to get the hash
-     */
-    CMAP_FOR_EACH(rule,node,&atctl_table){
-	hash = atctl_flow_hash(flow,&rule->match_rule.wc,set_domain_rule.domain_set,1);
-	inode = cmap_find(&atctl_table,hash);
-	if(inode)
-	    find_atctl_rule = CONTAINER_OF(inode,struct ofputil_atctl_rule,node);
-    }
-    if(!inode)
-	return NULL;
 
-    match_init(match,flow,&find_atctl_rule->match_rule.wc);
-    if(atctl_equal(&match->flow,&find_atctl_rule->match_rule.flow,set_domain_rule.domain_counter,set_domain_rule.domain_set))
-	return find_atctl_rule;
-  }
+static inline struct at_hash_rule*
+at_hash_lookup(struct at_hash *hash, struct netdev_flow_key *key)
+{
+    struct cmap_node *inode = cmap_find(&hash->hash, key->hash); 
+    if(!inode) {
+        return NULL;
+    }
+    struct at_hash_rule *rule = CONTAINER_OF(inode, struct at_hash_rule, 
+            node);
+    return rule;
+}
+
+void* at_lookup(struct at_table *tbl, struct netdev_flow_key *key)
+{
+    void *rule = NULL;
+    if(tbl->type == AT_HASH) {
+        rule = at_hash_lookup(&(tbl->at.hash_table), key);
+    }
+    if(tbl->type == AT_TRIE) {
+
+    }
+    return rule;
+}
+
+bool at_processing(struct netdev_flow_key *key)
+{
+    struct at_table *tbl;
+    PVECTOR_FOR_EACH(tbl, &a_tables) {
+        //fix me: currently only has one table and one 
+        //type. Tables cannot be composed. 
+        rule = at_lookup(tbl, key);
+
+    }
+}
 
 
 static void

@@ -2407,40 +2407,53 @@ ofputil_decode_domain_set(struct atctl_domain_set *set_rule,const struct ofp_hea
 
 /*convert atctl rule into ofpbuf*/
 struct ofpbuf*
-ofputil_encode_atctl_rule(struct ofputil_atctl_rule *rule,enum ofputil_protocol usable_protocols){
+ofputil_encode_at_rule_mod(struct ofputil_at_rule_mod *am, 
+        enum ofputil_protocol usable_protocols)
+{
     struct ofpbuf *msg;
     enum ofp_version version = ofputil_protocol_to_ofp_version(usable_protocols);
-    struct ofp10_atctl_add *add_rule;
+    struct ofp11_at_rule_mod *orm;
 
-    msg = ofpraw_alloc(OFPRAW_OFPT10_ADD_RULE,version,rule->ofpacts_len);
-    add_rule = ofpbuf_put_zeros(msg,sizeof *add_rule);
-    ofputil_match_to_ofp10_match(&rule->match_rule,&add_rule);
-    ofpacts_put_openflow_actions(rule->ofpacts, rule->ofpacts_len, msg, version);
+    msg = ofpraw_alloc(OFPRAW_OFPT11_RULE_MOD, version, am->ofpacts_len);
+    orm = ofpbuf_put_zeros(msg, sizeof *orm);
+    orm->table_id = am->table_id;
+    orm->command = am->command;
+    ofputil_put_ofp11_match(msg, &orm->match, usable_protocols);
+    ofpacts_put_openflow_actions(am->ofpacts, am->ofpacts_len, msg, version);
     ofpmsg_update_length(msg);
     return msg;
 }
 
 enum ofperr
-ofputil_decode_atctl_rule(struct ofputil_atctl_rule *add_rule,const struct ofp_header *oh,
-	struct ofpbuf *ofpacts,enum ofputil_protocol ofproto){
+ofputil_decode_at_rule_mod(struct ofputil_at_rule_mod *am, 
+        const struct ofp_header *oh, struct ofpbuf *ofpacts, 
+        enum ofputil_protocol ofproto)
+{
     enum ofperr error;
     struct ofpbuf b;
     enum ofpraw raw;
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     raw = ofpraw_pull_assert(&b);
-    if(raw == OFPRAW_OFPT10_ADD_RULE){
-	struct ofp10_atctl_add *new_rule;
-	new_rule = ofpbuf_pull(&b,sizeof *new_rule);
-	ofputil_match_from_ofp10_match(&new_rule->match,&add_rule->match_rule);
-	ofputil_normalize_match(&add_rule->match_rule);
-	error =  ofpacts_pull_openflow_instructions(&b, b.size, oh->version, ofpacts);
-	if(error)
-	    return error;
 
-	add_rule->ofpacts = ofpacts->data;
-	add_rule->ofpacts_len = ofpacts->size;
+    if(raw == OFPRAW_OFPT11_RULE_MOD){
+        struct ofp11_at_rule_mod *orm;
+
+        orm = ofpbuf_pull(&b, sizeof *orm);
+        error = ofputil_pull_ofp11_match(&b, &am->match_rule, NULL);
+        if (error) {
+            return error;
+        }
+        am->table_id = orm->table_id;
+        am->command = orm->command;
+
+        error = ofpacts_pull_openflow_instructions(&b, b.size, oh->version, ofpacts);
+        if(error)
+            return error;
+
+        am->ofpacts = ofpacts->data;
+        am->ofpacts_len = ofpacts->size;
     }
-
+    return 0;
 }
 
 

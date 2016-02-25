@@ -318,9 +318,10 @@ struct ofputil_flow_mod {
     /* Reason for delete; ignored for non-delete commands */
     enum ofp_flow_removed_reason delete_reason;
 };
-/*define the atctl table rule structure*/
-struct ofputil_atctl_rule{
-    struct cmap_node node;
+
+struct ofputil_at_rule_mod {
+    uint8_t table_id;
+    uint16_t command;
     struct match match_rule;
     struct ofpact *ofpacts;
     size_t ofpacts_len;
@@ -1148,5 +1149,16 @@ struct atctl_domain_set{
     enum set_domain_match domain_set;
     struct domain_mask mask;
 };
+
+
+struct ofpbuf*
+ofputil_encode_at_rule_mod(struct ofputil_at_rule_mod *am, 
+        enum ofputil_protocol usable_protocols);
+
+enum ofperr
+ofputil_decode_at_rule_mod(struct ofputil_at_rule_mod *am, 
+        const struct ofp_header *oh, struct ofpbuf *ofpacts, 
+        enum ofputil_protocol ofproto);
+
 
 #endif /* ofp-util.h */

@@ -60,6 +60,8 @@
 #include "unixctl.h"
 #include "openvswitch/vlog.h"
 #include "bundles.h"
+#include "atables.h"
+#include "pvector.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto);
 
@@ -72,6 +74,7 @@ COVERAGE_DEFINE(ofproto_update_port);
 
 extern struct atctl_domain_set set_domain_rule;
 extern struct cmap atctl_table;
+extern struct pvector a_tables;
 
 /* Default fields to use for prefix tries in each flow table, unless something
  * else is configured. */
@@ -5180,7 +5183,7 @@ ofproto_rule_reduce_timeouts(struct rule *rule,
     reduce_timeout(hard_timeout, &rule->hard_timeout);
     ovs_mutex_unlock(&rule->mutex);
 }
-
+
 static enum ofperr
 handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     OVS_EXCLUDED(ofproto_mutex)
@@ -6944,36 +6947,88 @@ exit:
     }
 
 
-static enum ofperr
-handle_atctl_add(struct ofconn *ofconn, const struct ofp_header *oh)
-    OVS_EXCLUDED(ofproto_mutex){
-	struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
-	struct ofputil_atctl_rule *add_rule;
-	struct ofpbuf ofpacts;
-	uint64_t ofpacts_stub[1024 / 8];
-	enum ofperr error;
-
-	error = reject_slave_controller(ofconn);
-	if (error) {
-	    goto exit;
-	}
-
-	ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
-	error = ofputil_decode_atctl_rule(add_rule,oh,&ofpacts,ofproto);
-
-	if (!error) {
-	    error = ofproto_check_ofpacts(ofproto, add_rule->ofpacts, add_rule->ofpacts_len);
-	}
-
-	if (!error){
-	    uint32_t hash = atctl_flow_hash(&add_rule->match_rule.flow,&add_rule->match_rule.wc,set_domain_rule.domain_set,1);
-	    cmap_insert(&atctl_table,CONST_CAST(struct cmap_node *,&add_rule->node),hash);
-	}
-	//ofconn_report_flow_mod(ofconn, add_rule.command);
-exit:
-   return error;
-  
+static enum ofperr at_insert_hash(struct at_hash *ht, 
+        struct ofputil_at_rule_mod *am) 
+{
+    if(ht->mask.hash == 0) {
+        at_flow_mask_init(&ht->mask, &am->match_rule);
+        cmap_init(&ht->hash);
     }
+
+    struct at_hash_rule *rule = xmalloc(sizeof *rule);
+    memset(rule, 0, sizeof(*rule));
+
+    at_flow_key_init_masked(&rule->key, &am->match_rule, 
+            &ht->mask);
+    cmap_insert(&ht->hash, &rule->node, rule->key.hash);
+}
+
+static enum ofperr atable_insert_rule(struct at_table *tbl,
+        struct ofutil_at_rule_mod *am)
+{
+    enum ofperr error = 0;
+
+    if(tbl->type == AT_HASH) {
+        error = at_insert_hash(&(tbl->at.hash_table), am);
+    }
+
+    if(tbl->type == AT_TRIE) {
+
+    }
+
+    return error;
+}
+
+static enum ofperr
+handle_at_rule_mod(struct ofconn *ofconn, const struct ofp_header *oh)
+    OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    struct ofputil_at_rule_mod am;
+    struct ofpbuf ofpacts;
+    uint64_t ofpacts_stub[1024 / 8];
+    enum ofperr error;
+
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        goto exit;
+    }
+
+    memset(&am, 0, sizeof(am));
+    ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
+    error = ofputil_decode_at_rule_mod(&am, oh, &ofpacts, ofproto);
+
+    if (!error) {
+        error = ofproto_check_ofpacts(ofproto, 
+                am.ofpacts, am.ofpacts_len);
+    }
+
+    if (!error) {
+        struct at_table *tbl; 
+        PVECTOR_FOR_EACH(tbl, &a_tables) {
+            if(tbl->id == am.table_id) {
+                break;
+            }
+        }
+
+        if(tbl->id != am.table_id) {
+            return OFPERR_OFPBRC_BAD_TABLE_ID;
+        }
+
+        if(am.command == OFPFC_ADDCTL_ADD) {
+            atable_insert_rule(tbl, &am);
+        } else if (am.command == OFPFC_ADDCTL_DEL) {
+
+        }
+        
+        //uint32_t hash = atctl_flow_hash(&add_rule->match_rule.flow,&add_rule->match_rule.wc,set_domain_rule.domain_set,1);
+        //cmap_insert(&atctl_table,CONST_CAST(struct cmap_node *,&add_rule->node),hash);
+
+    }
+    //ofconn_report_flow_mod(ofconn, add_rule.command);
+exit:
+    return error;
+}
 							
 
 static enum ofperr
@@ -7117,6 +7172,11 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_BUNDLE_ADD_MESSAGE:
         return handle_bundle_add(ofconn, oh);
 
+    case OFPTYPE_DOMAIN_SET:            
+        return handle_atctl_set(ofconn,oh);     
+    case OFPTYPE_AT_RULE_MOD:          
+        return handle_at_rule_mod(ofconn, oh);
+
     case OFPTYPE_HELLO:
     case OFPTYPE_ERROR:
     case OFPTYPE_FEATURES_REPLY:
@@ -7146,11 +7206,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_METER_FEATURES_STATS_REPLY:
     case OFPTYPE_TABLE_FEATURES_STATS_REPLY:
     case OFPTYPE_ROLE_STATUS:
-    case OFPTYPE_DOMAIN_SET:            
-	return handle_atctl_set(ofconn,oh);     
-    case OFPTYPE_ADD_RULE:          
-	return handle_atctl_add(ofconn,oh);
-
+    
     default:
         if (ofpmsg_is_stat_request(oh)) {
             return OFPERR_OFPBRC_BAD_STAT;

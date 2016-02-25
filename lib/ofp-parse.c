@@ -868,106 +868,118 @@ parse_ofp_flow_mod_str(struct ofputil_flow_mod *fm, const char *string,
 
     return error;
 }
+
 char * OVS_WARN_UNUSED_RESULT
-atctl_rule_parse__(struct ofputil_atctl_rule *rule,char *string,uint16_t command, enum ofputil_protocol *usable_protocols){
+at_rule_parse__(struct ofputil_at_rule_mod *am, char *string, 
+        uint16_t command, enum ofputil_protocol *usable_protocols) 
+{
     enum {
-	F_OUT_PORT = 1 << 0,
-	F_ACTIONS = 1 << 1,
-	F_IMPORTANCE = 1 << 2,
-	F_TIMEOUT = 1 << 3,
-	F_PRIORITY = 1 << 4,
-	F_FLAGS = 1 << 5,
+        F_OUT_PORT = 1 << 0,
+        F_ACTIONS = 1 << 1,
+        F_IMPORTANCE = 1 << 2,
+        F_TIMEOUT = 1 << 3,
+        F_PRIORITY = 1 << 4,
+        F_FLAGS = 1 << 5,
     } fields;
+
     char *act_str = NULL;
     char *save_ptr = NULL;
     char *name;
     *usable_protocols = OFPUTIL_P_ANY;
-    switch(command){
-	case ATCTL_ADD:
-	    fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FLAGS | F_IMPORTANCE;
-	    break;
-	case ATCTL_DEL:
-	    fields = F_OUT_PORT;
-	    break;
-	default:
-	    abort();
+
+    switch(command) {
+        case OFPFC_ATCTL_ADD:
+            fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FLAGS | F_IMPORTANCE;
+            break;
+        case OFPFC_ATCTL_DEL:
+            fields = F_OUT_PORT;
+            break;
+        default:
+            abort();
     }
-    match_init_catchall(&rule->match_rule);
+
+    am->table_id = 0;
+    am->command = command;
+    match_init_catchall(&am->match_rule);
+
     if(fields & F_ACTIONS){
-	act_str = extract_actions(string);
-	if(!act_str){
-	    return xstrdup("must specify  an action");
-	}
+        act_str = extract_actions(string);
+        if(!act_str){
+            return xstrdup("must specify an action");
+        }
     }
+
     for (name = strtok_r(string, "=, \t\r\n", &save_ptr); name;
-	    name = strtok_r(NULL, "=, \t\r\n", &save_ptr)){
-	const struct protocol *p;
-	char *error = NULL;
-	if (parse_protocol(name, &p)) {
-	    match_set_dl_type(&rule->match_rule, htons(p->dl_type));
-	    if (p->nw_proto) {
-		match_set_nw_proto(&rule->match_rule, p->nw_proto);
-	    }
-	} else {
-	    char *value;
-	    value = strtok_r(NULL, ", \t\r\n", &save_ptr);
-	    if (!value) {
-		return xasprintf("field %s missing value", name);
-	    }
-	    else if(mf_from_name(name)){
-		error = parse_field(mf_from_name(name),value,&rule->match_rule,&usable_protocols);
-	    }
-	    else{
-		error = xasprintf("unknown keyword %s", name);
-	    }
-	    if (error) 
-		return error;
-	}
+	    name = strtok_r(NULL, "=, \t\r\n", &save_ptr)) {
+
+        const struct protocol *p;
+        char *error = NULL;
+        if (parse_protocol(name, &p)) {
+            match_set_dl_type(&am->match_rule, htons(p->dl_type));
+            if (p->nw_proto) {
+                match_set_nw_proto(&am->match_rule, p->nw_proto);
+            }
+        } else {
+            char *value;
+            value = strtok_r(NULL, ", \t\r\n", &save_ptr);
+            if (!value) {
+                return xasprintf("field %s missing value", name);
+            }
+
+            if(strcmp(name, "table")) {
+                error = str_to_u8(value, "table", &am->table_id);
+            }
+            else if(mf_from_name(name)){
+                error = parse_field(mf_from_name(name), value, 
+                        &am->match_rule, &usable_protocols);
+            }
+            else{
+                error = xasprintf("unknown keyword %s", name);
+            }
+            if (error) 
+                return error;
+        }
     }
+
     if (fields & F_ACTIONS) {
-	enum ofputil_protocol action_usable_protocols;
-	struct ofpbuf ofpacts;
-	char *error;
+        enum ofputil_protocol action_usable_protocols;
+        struct ofpbuf ofpacts;
+        char *error;
 
-	ofpbuf_init(&ofpacts, 32);
-	error = ofpacts_parse_instructions(act_str, &ofpacts,
-		&action_usable_protocols);
-	*usable_protocols &= action_usable_protocols;
-	if (!error) {
-	    enum ofperr err;
+        ofpbuf_init(&ofpacts, 32);
+        error = ofpacts_parse_instructions(act_str, &ofpacts,
+                &action_usable_protocols);
+        *usable_protocols &= action_usable_protocols;
+        if (!error) {
+            enum ofperr err;
 
-	    err = ofpacts_check(ofpacts.data, ofpacts.size, &rule->match_rule.flow,
-		    OFPP_MAX, 0xff, 255, usable_protocols);
-	    if (!err && !usable_protocols) {
-		err = OFPERR_OFPBAC_MATCH_INCONSISTENT;
-	    }
-	    if (err) {
-		error = xasprintf("actions are invalid with specified match "
-			"(%s)", ofperr_to_string(err));
-	
-	    }
-
-	}
+            err = ofpacts_check(ofpacts.data, ofpacts.size, &rule->match_rule.flow,
+                    OFPP_MAX, 0xff, 255, usable_protocols);
+            if (!err && !usable_protocols) {
+                err = OFPERR_OFPBAC_MATCH_INCONSISTENT;
+            }
+            if (err) {
+                error = xasprintf("actions are invalid with specified match "
+                        "(%s)", ofperr_to_string(err));
+            }
+        }
         if (error) {
-	    ofpbuf_uninit(&ofpacts);
-	    return error;
-	}
+            ofpbuf_uninit(&ofpacts);
+            return error;
+        }
 
-	rule->ofpacts_len = ofpacts.size;
-	rule->ofpacts = ofpbuf_steal_data(&ofpacts);
+        rule->ofpacts_len = ofpacts.size;
+        rule->ofpacts = ofpbuf_steal_data(&ofpacts);
     }
     return NULL;
-
 }
 
 char * OVS_WARN_UNUSED_RESULT
-atctl_rule_parse(struct ofputil_atctl_rule *rule,char *string,uint16_t command, enum ofputil_protocol *usable_protocols){
+at_rule_parse(struct ofputil_at_rule_mod *am, char *string, 
+        uint16_t command, enum ofputil_protocol *usable_protocols)
+{
     char *str = xstrdup(string);
-    char *error = atctl_rule_parse__(rule,str,command,usable_protocols);
-    if(!error){
-	struct match match_copy = rule->match_rule;
-	ofputil_normalize_match(&match_copy);
-    }
+    char *error = at_rule_parse__(am, str, command, usable_protocols);
     free(str);
     return error;
 }

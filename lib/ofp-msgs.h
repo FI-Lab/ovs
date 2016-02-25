@@ -43,7 +43,7 @@
 #include "util.h"
 
 struct ovs_list;
-
+
 /* Raw identifiers for OpenFlow messages.
  *
  * Some OpenFlow messages with similar meanings have multiple variants across
@@ -247,6 +247,11 @@ enum ofpraw {
     /* OFPT 1.4+ (34): struct ofp14_bundle_ctrl_msg, uint8_t[]. */
     OFPRAW_OFPT14_BUNDLE_ADD_MESSAGE,
 
+    /* OFPT 1.0 (35): struct ofp10_atctl_set. */
+    OFPRAW_OFPT10_DOMAIN_SET,
+    /* OFPT 1.1 (36): struct ofp11_at_rule_mod. */
+    OFPRAW_OFPT11_AT_RULE_MOD,
+
 /* Standard statistics. */
 
     /* OFPST 1.0+ (0): void. */
@@ -391,12 +396,7 @@ enum ofpraw {
     /* NXST 1.0 (2): uint8_t[8][]. */
     OFPRAW_NXST_FLOW_MONITOR_REPLY,
     
-    /*OFPT 1.0 (35): struct ofp10_atctl_set. */
-    OFPRAW_OFPT10_DOMAIN_SET,
-    /*OFPT 1.0 (36): struct ofp10_atctl_add. */
-    OFPRAW_OFPT10_ADD_RULE,
-
-
+   
 /* Nicira extension messages.
  *
  * Nicira extensions that correspond to standard OpenFlow messages are listed
@@ -620,7 +620,7 @@ enum ofptype {
     OFPTYPE_FLOW_MONITOR_STATS_REPLY,   /* OFPRAW_OFPST14_FLOW_MONITOR_REPLY.
                                          * OFPRAW_NXST_FLOW_MONITOR_REPLY. */
     OFPTYPE_DOMAIN_SET,                 /* OFPRAW_OFPT10_DOMAIN_SET. */
-    OFPTYPE_ADD_RULE,                   /* OFPRAW_OFPT10_ADD_RULE. */
+    OFPTYPE_AT_RULE_MOD,                   /* OFPRAW_OFPT11_AT_RULE_MOD. */
 
     /* Nicira extensions. */
     OFPTYPE_SET_FLOW_FORMAT,      /* OFPRAW_NXT_SET_FLOW_FORMAT. */
