@@ -13,6 +13,8 @@ if WIN32
 lib_libopenvswitch_la_LIBADD += ${PTHREAD_LIBS}
 endif
 
+#lib_libopenvswitch_la_CFLAGS = \
+#	$(AM_LDFLAGS) -Werror
 lib_libopenvswitch_la_LDFLAGS = \
         -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
         -Wl,--version-script=$(top_builddir)/lib/libopenvswitch.sym \

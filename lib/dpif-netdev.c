@@ -531,7 +531,7 @@ get_dp_netdev(const struct dpif *dpif)
 {
     return dpif_netdev_cast(dpif)->dp;
 }
-
+
 enum pmd_info_type {
     PMD_INFO_SHOW_STATS,  /* show how cpu cycles are spent */
     PMD_INFO_CLEAR_STATS  /* set the cycles count to 0 */
@@ -3129,6 +3129,377 @@ dp_packet_swap(struct dp_packet **a, struct dp_packet **b)
     *b = tmp;
 }
 
+#include "atables.h"
+#include "simap.h"
+/* Algorithmic Flow Tables Functions:
+ * FIXME:currently only hash table
+ *
+ * many needed functions are static, thus only visible in this file, 
+ * I have to put all the codes there, a little bit of mess. 
+ */
+
+
+/* Table manipulation functions*/
+void aflow_hash_table_init(struct aflow_hash *h)
+{
+    memset(&h->mask, 0, sizeof(h->mask));
+    cmap_init(&h->hash);
+}
+
+struct aflow_hash_rule * aflow_hash_table_find(struct aflow_hash *h, 
+        struct netdev_flow_key *key)
+{
+    struct aflow_hash_rule *rule;
+    uint32_t hash = netdev_flow_key_hash_in_mask(key, &h->mask);
+    bool found = false;
+
+    CMAP_FOR_EACH_WITH_HASH(rule, node, hash, &h->hash) {
+        if(netdev_flow_key_equal(&rule->key, key)) {
+            found = true;
+            break;
+        }
+    }
+
+    return found == true? rule : NULL;
+}
+
+void aflow_hash_rule_init(struct aflow_hash_rule *rule)
+{
+    memset(rule, 0, sizeof *rule);
+}
+
+void aflow_hash_rule_uinit(struct aflow_hash_rule *rule)
+{
+    dp_netdev_actions_free(rule->actions);
+    free(rule);
+}
+
+static void aflow_hash_table_uinit(struct aflow_hash *h)
+{
+    struct aflow_hash_rule *rule;
+    CMAP_FOR_EACH(rule, node, &h->hash) {
+        aflow_hash_rule_uinit(rule);
+    }
+    cmap_destroy(&h->hash);
+}
+
+
+void aflow_hash_rule_insert(struct aflow_hash *h,
+        struct match *match, struct dp_netdev_actions *actions) 
+        
+{
+    struct aflow_hash_rule *rule = xmalloc(sizeof(struct aflow_rule));
+
+    netdev_flow_key_from_flow(&rule->key, &(match->flow));
+    rule->actions = actions;
+
+    //The first inserted rule determines the mask of this hash table
+    if(h->mask.len == 0) {
+        netdev_flow_mask_init(&h->mask, match);
+    }
+    uint32_t hash = netdev_flow_key_hash_in_mask(&rule->key, &h->mask); 
+    
+    cmap_insert(&h->hash, &rule->node, hash);
+}
+
+void aflow_hash_rule_delete(struct aflow_hash *h,
+        struct match *match)
+{
+    struct netdev_flow_key key;
+    //struct netdev_flow_key mask;
+
+    netdev_flow_key_from_flow(&key, &match->flow);
+    //FIXME: not check the rule mask, use h->mask anyway
+
+    struct aflow_hash_rule *rule;
+    uint32_t hash = netdev_flow_key_hash_in_mask(&key, &h->mask);
+    bool found = false;
+
+    CMAP_FOR_EACH_WITH_HASH(rule, node, hash, &h->hash) {
+        if(netdev_flow_key_equal(&rule->key, &key)) {
+            found = true;
+            break;
+        }
+    }
+
+    if(found) {
+        cmap_remove(&h->hash, &rule->node, hash);
+        aflow_hash_rule_uinit(rule);
+    }
+}
+
+/* aFlow manipulate functions */
+
+static void aflow_match_actions_from_string(const char *key_s,
+        const char *actions_s, struct match *match, 
+        struct dp_netdev_actions **dp_actions, struct dpif *dpif) 
+{
+    struct dpif_port dpif_port;
+    struct dpif_port_dump port_dump;
+    struct ofpbuf actions;
+    struct ofpbuf key;
+    struct ofpbuf mask;
+    struct simap port_names;
+
+
+    simap_init(&port_names);
+    DPIF_PORT_FOR_EACH (&dpif_port, &port_dump, dpif) {
+        simap_put(&port_names, dpif_port.name, odp_to_u32(dpif_port.port_no));
+    }
+
+
+    ofpbuf_init(&key, 0);
+    ofpbuf_init(&mask, 0);
+    int error = odp_flow_from_string(key_s, &port_names, &key, &mask);
+    simap_destroy(&port_names);
+    if (error) {
+        goto out_freekeymask;
+    }
+
+    error = dpif_netdev_flow_from_nlattrs(key.data, key.size, &match->flow);
+    if (error) {
+        goto out_freekeymask;
+    }
+    error = dpif_netdev_mask_from_nlattrs(key.data, key.size,
+            mask.data, mask.size,
+            &match->flow, &(match->wc.masks));
+
+    if (error) {
+        goto out_freekeymask;
+    }
+
+    if(!actions_s) {
+        *dp_actions = NULL;
+        goto out_freekeymask;
+    }
+
+    ofpbuf_init(&actions, 0);
+    error = odp_actions_from_string(actions_s, NULL, &actions);
+    if (error) {
+        goto out_freeactions;
+    }
+
+    *dp_actions = dp_netdev_actions_create(actions.data, actions.size);
+
+out_freeactions:
+    ofpbuf_uninit(&actions);
+out_freekeymask:
+    ofpbuf_uninit(&mask);
+    ofpbuf_uninit(&key);
+}
+
+struct pvector a_tables;
+atomic_bool enable_aflows = ATOMIC_VAR_INIT(true);
+
+void aflow_init()
+{
+    pvector_init(&a_tables);
+}
+
+void aflow_uinit()
+{
+    pvector_destroy(&a_tables);
+}
+
+struct aflow_table* aflow_find_table(uint8_t table_id)
+{
+    struct aflow_table *at = NULL;
+    bool found = false;
+
+    PVECTOR_FOR_EACH(at, &a_tables) {
+        if(at->id == table_id) {
+            found = true;
+            break;
+        }
+    }
+
+    return found == true ? at : NULL; 
+}
+
+int aflow_dpctl_table_op(uint8_t type, uint8_t table_id, 
+        const char *match_s, const char *actions_s, struct dpif *dpif)
+{
+    struct match match;
+    struct dp_netdev_actions *dp_act = NULL;
+
+    struct aflow_table *at = aflow_find_table(table_id); 
+    if(!at) {
+        return -EINVAL;
+    }
+
+    aflow_match_actions_from_string(match_s, actions_s, &match, &dp_act, dpif); 
+    switch(type) {
+        case AFLOW_HASH_ADD:
+            aflow_hash_rule_insert(&at->af.hash_table, &match, dp_act); 
+            break;
+        case AFLOW_HASH_DEL:
+            aflow_hash_rule_delete(&at->af.hash_table, &match);
+            break;
+        default:
+            OVS_NOT_REACHED();
+    }
+
+    return 0; 
+}
+
+int aflow_dpctl_add_table(uint8_t type, uint8_t id, int priority)
+{
+    struct aflow_table *at = xmalloc(sizeof *at); 
+    at->type = type;
+    at->id = id;
+    at->priority = priority;
+
+    aflow_hash_table_init(&at->af.hash_table);
+
+    switch(type) {
+        case AFLOW_HASH:
+            pvector_insert(&a_tables, at, priority);
+            break;
+        case AFLOW_TRIE:
+            break;
+    }
+    
+    return 0;
+}
+
+int aflow_dpctl_del_table(uint8_t id)
+{
+    //FIXME: impl not avail 
+
+    return 0;
+}
+
+/* aflow lookup
+ *
+ *
+ */
+
+static struct aflow_rule * aflow_lookup(struct netdev_flow_key *key) 
+{
+    //FIXME: no table composition
+
+    struct aflow_table *tbl;
+    struct aflow_rule *rule = NULL;
+    PVECTOR_FOR_EACH(tbl, &a_tables) {
+        if(tbl->type == AFLOW_HASH) {
+           rule = (struct aflow_rule*)
+               aflow_hash_table_find(&tbl->af.hash_table, key); 
+        }
+    }
+
+    return rule;
+}
+
+
+/* aflow batches
+ * 
+ * Each batch corresponds to a same rule, that is a same action. 
+ * Each batch contains NETDEV_MAX_BURST packets, that each netdev 
+ * packet pull (thus each call of aflow_processing) will not cause batch array 
+ * overflow. 
+ */
+
+struct aflow_batch 
+{
+    uint32_t packet_cnt;
+    //rule can be trie rule or hash rule
+    struct aflow_rule *rule;
+    struct dp_netdev_actions *actions;
+    struct dp_packet *pkts[NETDEV_MAX_BURST];
+};
+
+static void aflow_batch_init(struct aflow_batch *batch, 
+        void *rule)
+{
+    batch->packet_cnt = 0;
+    batch->rule = rule;
+    batch->actions = NULL;
+}
+
+static void aflow_queue_batch(struct aflow_batch *batches, 
+        size_t *n_batches, 
+        struct aflow_rule *rule, 
+        struct dp_packet *pkt, 
+        struct dp_netdev_actions *act) 
+{
+    struct aflow_batch *batch;
+
+    if(OVS_LIKELY(rule->batch)) {
+        batch = rule->batch;
+        batch->pkts[batch->packet_cnt ++] = pkt;
+        return;
+    }
+   
+    batch = &batches[*n_batches];
+    *n_batches = *n_batches + 1;
+
+    aflow_batch_init(batch, rule);
+    batch->pkts[batch->packet_cnt++] = pkt;
+    batch->actions = act;
+}
+
+static void aflow_batch_execute(struct dp_netdev_pmd_thread *pmd, struct aflow_batch *batch)
+{
+    struct dp_netdev_actions *actions = batch->actions;
+
+    dp_netdev_execute_actions(pmd, batch->pkts, batch->packet_cnt, true,
+                              actions->actions, actions->size);
+}
+
+#if 1
+OVS_CONSTRUCTOR(test_aflow) {
+    aflow_init();
+    aflow_dpctl_add_table(AFLOW_HASH, 0, 0);
+    struct dpif *dpif;
+
+    int ret = dpif_open("ovs-netdev", "netdev", &dpif);
+    if(ret == 0) 
+        aflow_dpctl_table_op(AFLOW_HASH_ADD, 0, "in_port(0)", "output:1", dpif);
+    else 
+        VLOG_WARN("Cannot find dpif for netdev");
+}
+#endif
+
+static int aflow_processing(struct dp_packet **packets, 
+        size_t cnt, struct netdev_flow_key *keys_out,
+        struct aflow_batch batches[], size_t *n_batches) 
+{
+    struct netdev_flow_key key;
+    size_t i, notfound_cnt = 0;
+    struct aflow_rule *rule = NULL;
+
+    miniflow_initialize(&key.mf, key.buf);
+    for (i = 0; i < cnt; i++) {
+
+        if (OVS_UNLIKELY(dp_packet_size(packets[i]) < ETH_HEADER_LEN)) {
+            dp_packet_delete(packets[i]);
+            continue;
+        }
+
+        if (i != cnt - 1) {
+            /* Prefetch next packet data */
+            OVS_PREFETCH(dp_packet_data(packets[i+1]));
+        }
+
+        miniflow_extract(packets[i], &key.mf);
+        rule = aflow_lookup(&key);
+
+        if (OVS_LIKELY(rule)) {
+            aflow_queue_batch(batches, n_batches, rule, packets[i], rule->actions);  
+        } else {
+            if (i != notfound_cnt) {
+                dp_packet_swap(&packets[i], &packets[notfound_cnt]);
+            }
+            keys_out[notfound_cnt++] = key;
+        }
+    }
+
+    return notfound_cnt;
+}
+
+
+
+
 /* Try to process all ('cnt') the 'packets' using only the exact match cache
  * 'flow_cache'. If a flow is not found for a packet 'packets[i]', the
  * miniflow is copied into 'keys' and the packet pointer is moved at the
@@ -3137,16 +3508,20 @@ dp_packet_swap(struct dp_packet **a, struct dp_packet **b)
  * The function returns the number of packets that needs to be processed in the
  * 'packets' array (they have been moved to the beginning of the vector).
  */
+
+/* because of the use of aflow, emc_processing does not need to 
+ * parse packet and extract the key again, will comments all related code
+ */
 static inline size_t
 emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
                size_t cnt, struct netdev_flow_key *keys,
                struct packet_batch batches[], size_t *n_batches)
 {
     struct emc_cache *flow_cache = &pmd->flow_cache;
-    struct netdev_flow_key key;
+    //struct netdev_flow_key key;
     size_t i, notfound_cnt = 0;
 
-    miniflow_initialize(&key.mf, key.buf);
+    //miniflow_initialize(&key.mf, key.buf);
     for (i = 0; i < cnt; i++) {
         struct dp_netdev_flow *flow;
 
@@ -3160,20 +3535,25 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
             OVS_PREFETCH(dp_packet_data(packets[i+1]));
         }
 
-        miniflow_extract(packets[i], &key.mf);
-        key.len = 0; /* Not computed yet. */
-        key.hash = dpif_netdev_packet_get_rss_hash(packets[i], &key.mf);
+        //FIX for aflow
+        //miniflow_extract(packets[i], &key.mf);
+        //key.len = 0; /* Not computed yet. */
+        //key.hash = dpif_netdev_packet_get_rss_hash(packets[i], &key.mf);
+        keys[i].len = 0;
+        keys[i].hash = dpif_netdev_packet_get_rss_hash(packets[i], &keys[i].mf); 
 
-        flow = emc_lookup(flow_cache, &key);
+        //FIX for aflow
+        flow = emc_lookup(flow_cache, &keys[i]);
         if (OVS_LIKELY(flow)) {
-            dp_netdev_queue_batches(packets[i], flow, &key.mf, batches,
+            dp_netdev_queue_batches(packets[i], flow, &keys[i].mf, batches,
                                     n_batches);
         } else {
             if (i != notfound_cnt) {
                 dp_packet_swap(&packets[i], &packets[notfound_cnt]);
             }
 
-            keys[notfound_cnt++] = key;
+            //FIX for aflow
+            keys[notfound_cnt++] = keys[i];
         }
     }
 
@@ -3322,11 +3702,26 @@ dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
 #endif
     struct netdev_flow_key keys[PKT_ARRAY_SIZE];
     struct packet_batch batches[PKT_ARRAY_SIZE];
+    struct aflow_batch a_batches[PKT_ARRAY_SIZE];
     long long now = time_msec();
     size_t newcnt, n_batches, i;
 
     n_batches = 0;
-    newcnt = emc_processing(pmd, packets, cnt, keys, batches, &n_batches);
+    newcnt = aflow_processing(packets, cnt, keys, a_batches, &n_batches);
+    for(i = 0; i < n_batches; i++) {
+        a_batches[i].rule = NULL;
+    }
+    for(i = 0; i < n_batches; i++) {
+        aflow_batch_execute(pmd, &a_batches[i]);
+    }
+    if(OVS_LIKELY(!newcnt)) {
+        return;
+    }
+
+    n_batches = 0;
+    //change 'cnt' to 'newcnt'
+    //newcnt = emc_processing(pmd, packets, cnt, keys, batches, &n_batches);
+    newcnt = emc_processing(pmd, packets, newcnt, keys, batches, &n_batches);
     if (OVS_UNLIKELY(newcnt)) {
         fast_path_processing(pmd, packets, newcnt, keys, batches, &n_batches);
     }
@@ -3925,3 +4320,7 @@ dpcls_lookup(const struct dpcls *cls, const struct netdev_flow_key keys[],
     }
     return false;                     /* Some misses. */
 }
+
+
+
+
