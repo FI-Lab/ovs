@@ -847,6 +847,8 @@ create_dp_netdev(const char *name, const struct dpif_class *class,
     return 0;
 }
 
+void test_aflow_with_flows(struct dpif *dpif);
+
 static int
 dpif_netdev_open(const struct dpif_class *class, const char *name,
                  bool create, struct dpif **dpifp)
@@ -868,6 +870,7 @@ dpif_netdev_open(const struct dpif_class *class, const char *name,
         dp->dpif = *dpifp;
     }
     ovs_mutex_unlock(&dp_netdev_mutex);
+    test_aflow_with_flows(dp->dpif);
 
     return error;
 }
@@ -3146,6 +3149,24 @@ void aflow_hash_table_init(struct aflow_hash *h)
     cmap_init(&h->hash);
 }
 
+
+// copy from dpcls_rule_matches_key(...)
+static inline bool aflow_rule_matches_key(struct aflow_rule *rule, 
+        struct netdev_flow_key *mask, 
+        struct netdev_flow_key *target)
+{
+    const uint64_t *keyp = rule->key.mf.inline_values;
+    const uint64_t *maskp = mask->mf.inline_values;
+    uint64_t target_u64;
+
+    NETDEV_FLOW_KEY_FOR_EACH_IN_MAP(target_u64, target, rule->key.mf.map) {
+        if (OVS_UNLIKELY((target_u64 & *maskp++) != *keyp++)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 struct aflow_hash_rule * aflow_hash_table_find(struct aflow_hash *h, 
         struct netdev_flow_key *key)
 {
@@ -3153,8 +3174,21 @@ struct aflow_hash_rule * aflow_hash_table_find(struct aflow_hash *h,
     uint32_t hash = netdev_flow_key_hash_in_mask(key, &h->mask);
     bool found = false;
 
+    //struct flow flow_pkt;
+    //struct flow flow_mask;
+    //struct flow flow_rule;
+    //memset(&flow_pkt, 0, sizeof (struct flow));
+    //memset(&flow_mask, 0, sizeof (struct flow));
+    //memset(&flow_rule, 0, sizeof (struct flow));
+
+    
+    //miniflow_expand(&key->mf, &flow_pkt);
+    //miniflow_expand(&h->mask.mf, &flow_mask);
+
     CMAP_FOR_EACH_WITH_HASH(rule, node, hash, &h->hash) {
-        if(netdev_flow_key_equal(&rule->key, key)) {
+
+        //miniflow_expand(&rule->key.mf, &flow_rule);
+        if(aflow_rule_matches_key(rule, &h->mask, key)) {
             found = true;
             break;
         }
@@ -3165,7 +3199,7 @@ struct aflow_hash_rule * aflow_hash_table_find(struct aflow_hash *h,
 
 void aflow_hash_rule_init(struct aflow_hash_rule *rule)
 {
-    memset(rule, 0, sizeof *rule);
+    rule->batch = NULL;
 }
 
 void aflow_hash_rule_uinit(struct aflow_hash_rule *rule)
@@ -3189,14 +3223,16 @@ void aflow_hash_rule_insert(struct aflow_hash *h,
         
 {
     struct aflow_hash_rule *rule = xmalloc(sizeof(struct aflow_rule));
-
-    netdev_flow_key_from_flow(&rule->key, &(match->flow));
-    rule->actions = actions;
+    aflow_hash_rule_init(rule);
 
     //The first inserted rule determines the mask of this hash table
     if(h->mask.len == 0) {
         netdev_flow_mask_init(&h->mask, match);
     }
+
+    netdev_flow_key_init_masked(&rule->key, &match->flow, &h->mask);
+    rule->actions = actions;
+
     uint32_t hash = netdev_flow_key_hash_in_mask(&rule->key, &h->mask); 
     
     cmap_insert(&h->hash, &rule->node, hash);
@@ -3316,24 +3352,21 @@ struct aflow_table* aflow_find_table(uint8_t table_id)
     return found == true ? at : NULL; 
 }
 
-int aflow_dpctl_table_op(uint8_t type, uint8_t table_id, 
-        const char *match_s, const char *actions_s, struct dpif *dpif)
+int aflow_table_op(uint8_t type, uint8_t table_id, 
+        struct match *match, struct dp_netdev_actions *dp_act)
+        
 {
-    struct match match;
-    struct dp_netdev_actions *dp_act = NULL;
-
     struct aflow_table *at = aflow_find_table(table_id); 
     if(!at) {
         return -EINVAL;
     }
 
-    aflow_match_actions_from_string(match_s, actions_s, &match, &dp_act, dpif); 
     switch(type) {
         case AFLOW_HASH_ADD:
-            aflow_hash_rule_insert(&at->af.hash_table, &match, dp_act); 
+            aflow_hash_rule_insert(&at->af.hash_table, match, dp_act); 
             break;
         case AFLOW_HASH_DEL:
-            aflow_hash_rule_delete(&at->af.hash_table, &match);
+            aflow_hash_rule_delete(&at->af.hash_table, match);
             break;
         default:
             OVS_NOT_REACHED();
@@ -3342,7 +3375,7 @@ int aflow_dpctl_table_op(uint8_t type, uint8_t table_id,
     return 0; 
 }
 
-int aflow_dpctl_add_table(uint8_t type, uint8_t id, int priority)
+int aflow_add_table(uint8_t type, uint8_t id, int priority)
 {
     struct aflow_table *at = xmalloc(sizeof *at); 
     at->type = type;
@@ -3362,7 +3395,7 @@ int aflow_dpctl_add_table(uint8_t type, uint8_t id, int priority)
     return 0;
 }
 
-int aflow_dpctl_del_table(uint8_t id)
+int aflow_del_table(uint8_t id)
 {
     //FIXME: impl not avail 
 
@@ -3447,17 +3480,74 @@ static void aflow_batch_execute(struct dp_netdev_pmd_thread *pmd, struct aflow_b
 }
 
 #if 1
-OVS_CONSTRUCTOR(test_aflow) {
+OVS_CONSTRUCTOR(test_aflow) 
+{
     aflow_init();
-    aflow_dpctl_add_table(AFLOW_HASH, 0, 0);
-    struct dpif *dpif;
-
-    int ret = dpif_open("ovs-netdev", "netdev", &dpif);
-    if(ret == 0) 
-        aflow_dpctl_table_op(AFLOW_HASH_ADD, 0, "in_port(0)", "output:1", dpif);
-    else 
-        VLOG_WARN("Cannot find dpif for netdev");
+    aflow_add_table(AFLOW_HASH, 0, 0);
 }
+
+void test_aflow_with_flows(struct dpif *dpif) 
+{
+        struct match match;
+        struct dp_netdev_actions *dp_act;
+	
+	memset(&match, 0, sizeof match);
+
+        aflow_match_actions_from_string("in_port(2),eth(src=00:11:22:33:11:02,dst=00:11:22:33:11:01),eth_type(0x0800),ipv4(src=192.168.11.2,dst=192.168.11.1,proto=1,tos=0,ttl=128,frag=no),icmp(type=0,code=0)", "3", &match, &dp_act, dpif);
+    //do not need all these shits
+        memset(&match.flow.dl_dst, 0, sizeof(match.flow.dl_dst));
+        memset(&match.flow.dl_src, 0, sizeof(match.flow.dl_src));
+        match.flow.dl_type = 0;
+        match.flow.nw_src = 0;
+        match.flow.nw_dst = 0;
+        match.flow.nw_proto=0;
+        match.flow.nw_tos = 0;
+        match.flow.nw_ttl = 0;
+	match.flow.tp_src = 0;
+	match.flow.tp_dst = 0;
+
+        memset(&match.wc.masks.dl_dst, 0, sizeof(match.wc.masks.dl_dst));
+        memset(&match.wc.masks.dl_src, 0, sizeof(match.wc.masks.dl_src));
+        match.wc.masks.dl_type = 0;
+        match.wc.masks.nw_src = 0;
+        match.wc.masks.nw_dst = 0;
+        match.wc.masks.nw_proto=0;
+        match.wc.masks.nw_tos = 0;
+        match.wc.masks.nw_ttl = 0;
+	match.wc.masks.tp_src = 0;
+	match.wc.masks.tp_dst = 0;
+
+        aflow_table_op(AFLOW_HASH_ADD, 0, &match, dp_act);
+
+	memset(&match, 0, sizeof match);
+
+	aflow_match_actions_from_string("in_port(3),eth(src=00:11:22:33:11:02,dst=00:11:22:33:11:01),eth_type(0x0800),ipv4(src=192.168.11.2,dst=192.168.11.1,proto=1,tos=0,ttl=128,frag=no),icmp(type=0,code=0)", "2", &match, &dp_act, dpif);
+    //do not need all these shits
+        memset(&match.flow.dl_dst, 0, sizeof(match.flow.dl_dst));
+        memset(&match.flow.dl_src, 0, sizeof(match.flow.dl_src));
+        match.flow.dl_type = 0;
+        match.flow.nw_src = 0;
+        match.flow.nw_dst = 0;
+        match.flow.nw_proto=0;
+        match.flow.nw_tos = 0;
+        match.flow.nw_ttl = 0;
+	match.flow.tp_src = 0;
+	match.flow.tp_dst = 0;
+
+        memset(&match.wc.masks.dl_dst, 0, sizeof(match.wc.masks.dl_dst));
+        memset(&match.wc.masks.dl_src, 0, sizeof(match.wc.masks.dl_src));
+        match.wc.masks.dl_type = 0;
+        match.wc.masks.nw_src = 0;
+        match.wc.masks.nw_dst = 0;
+        match.wc.masks.nw_proto=0;
+        match.wc.masks.nw_tos = 0;
+        match.wc.masks.nw_ttl = 0;
+	match.wc.masks.tp_src = 0;
+	match.wc.masks.tp_dst = 0;
+
+        aflow_table_op(AFLOW_HASH_ADD, 0, &match, dp_act);
+}
+
 #endif
 
 static int aflow_processing(struct dp_packet **packets, 

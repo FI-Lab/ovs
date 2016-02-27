@@ -85,10 +85,11 @@ void aflow_init(void);
 void aflow_uinit(void);
 struct aflow_table* aflow_find_table(uint8_t table_id);
 
-int aflow_dpctl_table_op(uint8_t type, uint8_t table_id, 
-        const char *match_s, const char *actions_s, struct dpif *dpif);
 
-int aflow_dpctl_add_table(uint8_t type, uint8_t id, int priority);
-int aflow_dpctl_del_table(uint8_t id);
+int aflow_table_op(uint8_t type, uint8_t table_id, 
+        struct match *match, struct dp_netdev_actions *dp_act);
+
+int aflow_add_table(uint8_t type, uint8_t id, int priority);
+int aflow_del_table(uint8_t id);
 
 #endif
