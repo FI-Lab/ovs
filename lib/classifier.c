@@ -1794,6 +1794,14 @@ fill_range_wc(const struct cls_subtable *subtable, struct flow_wildcards *wc,
     }
 }
 
+static inline void mask_normalize(struct flow_wildcards *wc)
+{
+    wc->masks.nw_src |= wc->masks.nw_src ? UINT32_MAX >> (31 - leftmost_1bit_idx(wc->masks.nw_src)) : 0;
+    wc->masks.nw_dst |= wc->masks.nw_dst ? UINT32_MAX >> (31 - leftmost_1bit_idx(wc->masks.nw_dst)) : 0;
+    wc->masks.tp_src |= wc->masks.tp_src ? UINT16_MAX >> (15 - leftmost_1bit_idx(wc->masks.tp_src)) : 0;
+    wc->masks.tp_dst |= wc->masks.tp_dst ? UINT16_MAX >> (15 - leftmost_1bit_idx(wc->masks.tp_dst)) : 0;
+}
+
 static const struct cls_match *
 find_match_wc(const struct cls_subtable *subtable, cls_version_t version,
               const struct flow *flow, struct trie_ctx trie_ctx[CLS_MAX_TRIES],
@@ -1844,6 +1852,7 @@ find_match_wc(const struct cls_subtable *subtable, cls_version_t version,
             ASSIGN_CONTAINER(head, inode - i, index_nodes);
             if (miniflow_and_mask_matches_flow_wc(&head->flow, &subtable->mask,
                                                   flow, wc)) {
+		mask_normalize(wc);
                 /* Return highest priority rule that is visible. */
                 CLS_MATCH_FOR_EACH (rule, head) {
                     if (OVS_LIKELY(cls_match_visible_in_version(rule,
