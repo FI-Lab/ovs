@@ -142,7 +142,9 @@ struct emc_cache {
 
 /* Simple non-wildcarding single-priority classifier. */
 
+#include "tbm/tbmv4.h"
 struct dpcls {
+    struct tbm_trie trie;
     struct cmap subtables_map;
     struct pvector subtables;
 };
@@ -3182,6 +3184,41 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
     return notfound_cnt;
 }
 
+struct tbm_trie_stat {
+    uint32_t prefix_cnt;
+    uint32_t max_table;
+    uint32_t min_table;
+    uint32_t table_total;
+};
+
+struct tbm_trie_leaf {
+    struct pvector subtables; //A set of trie_subtables
+};
+
+static void
+tbm_traverse_stat(uint32_t ip OVS_UNUSED, uint32_t cidr OVS_UNUSED, void *nhi, void *user)
+{
+    struct tbm_trie_leaf *leaf = (struct tbm_trie_leaf *)nhi;
+    struct tbm_trie_stat *stat = (struct tbm_trie_stat *)user; 
+
+    stat->prefix_cnt ++;
+    size_t tbl_cnt = pvector_count(&leaf->subtables);
+         
+    if(tbl_cnt > stat->max_table) {
+        stat->max_table = tbl_cnt; 
+    }
+    if(tbl_cnt < stat->min_table) {
+        stat->min_table = tbl_cnt; 
+    }
+    stat->table_total += tbl_cnt;
+}
+
+static void
+tbm_trie_get_stat(struct tbm_trie *trie, struct tbm_trie_stat *stat) 
+{
+    tbm_traverse_trie(trie, tbm_traverse_stat, stat);
+}
+
 static inline void
 fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                      struct dp_packet **packets, size_t cnt,
@@ -3205,6 +3242,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         /* Key length is needed in all the cases, hash computed on demand. */
         keys[i].len = netdev_flow_key_size(count_1bits(keys[i].mf.map));
     }
+
     any_miss = !dpcls_lookup(&pmd->cls, keys, rules, cnt);
     if (OVS_UNLIKELY(any_miss) && !fat_rwlock_tryrdlock(&dp->upcall_rwlock)) {
         uint64_t actions_stub[512 / 8], slow_stub[512 / 8];
@@ -3730,13 +3768,82 @@ struct dpcls_subtable {
     /* 'mask' must be the last field, additional space is allocated here. */
 };
 
+
+struct trie_subtable {
+    struct dpcls_subtable *subtable;
+    uint32_t rule_cnt; /*rule contained in this subtable and consists of this prefix */
+};
+
+static inline void trie_subtable_init(struct trie_subtable *t_sub)
+{
+    t_sub->subtable = NULL;
+    t_sub->rule_cnt = 0;
+}
+
+static inline void trie_subtable_uinit(struct trie_subtable *t_sub)
+{
+    ovsrcu_postpone(free, t_sub);
+}
+
+
+static inline void tbm_trie_leaf_init(struct tbm_trie_leaf *leaf) 
+{
+    pvector_init(&leaf->subtables);
+}
+
+static inline void tbm_trie_leaf_uinit(struct tbm_trie_leaf *leaf) 
+{
+    struct trie_subtable *sub;
+    PVECTOR_FOR_EACH(sub, &leaf->subtables) {
+        pvector_remove(&leaf->subtables, sub);
+        trie_subtable_uinit(sub);
+    }
+    pvector_destroy(&leaf->subtables);
+    //when subtable is released by rcu, leaf can be freed.
+    ovsrcu_postpone(free, leaf);
+}
+
+
+
 /* Initializes 'cls' as a classifier that initially contains no classification
  * rules. */
 static void
 dpcls_init(struct dpcls *cls)
 {
+    tbm_init_trie(&cls->trie);
     cmap_init(&cls->subtables_map);
     pvector_init(&cls->subtables);
+}
+
+
+
+static void
+tbm_traverse_remove(uint32_t ip OVS_UNUSED, uint32_t cidr OVS_UNUSED, void *nhi, void *user)
+{
+    struct tbm_trie_leaf *leaf = (struct tbm_trie_leaf *)nhi;
+    struct dpcls_subtable *remove = (struct dpcls_subtable *)user;
+    struct trie_subtable *iter;
+
+    //directly call pvector_remove may cause assertation. 
+    PVECTOR_FOR_EACH(iter, &leaf->subtables) {
+        if(iter->subtable == remove) {
+            pvector_remove(&leaf->subtables, iter);
+            pvector_publish(&leaf->subtables);
+            trie_subtable_uinit(iter);
+            break;
+        }
+    }
+}
+
+
+
+//This could be expensive, because the prefixes in trie
+//should be a lot.
+static void
+tbm_trie_remove_subtable(struct tbm_trie *trie, 
+	struct dpcls_subtable *subtable) 
+{
+    tbm_traverse_trie(trie, tbm_traverse_remove, subtable);
 }
 
 static void
@@ -3746,7 +3853,14 @@ dpcls_destroy_subtable(struct dpcls *cls, struct dpcls_subtable *subtable)
     cmap_remove(&cls->subtables_map, &subtable->cmap_node,
                 subtable->mask.hash);
     cmap_destroy(&subtable->rules);
+    tbm_trie_remove_subtable(&cls->trie, subtable);
     ovsrcu_postpone(free, subtable);
+}
+
+static void tbm_destroy_nhi(void *nhi)
+{
+    struct tbm_trie_leaf *leaf = (struct tbm_trie_leaf *)nhi;
+    tbm_trie_leaf_uinit(leaf);
 }
 
 /* Destroys 'cls'.  Rules within 'cls', if any, are not freed; this is the
@@ -3764,6 +3878,7 @@ dpcls_destroy(struct dpcls *cls)
         cmap_destroy(&cls->subtables_map);
         pvector_destroy(&cls->subtables);
     }
+    tbm_destroy_trie(&cls->trie, tbm_destroy_nhi);
 }
 
 static struct dpcls_subtable *
@@ -3797,6 +3912,58 @@ dpcls_find_subtable(struct dpcls *cls, const struct netdev_flow_key *mask)
     return dpcls_create_subtable(cls, mask);
 }
 
+static void trie_prune_insert(struct dpcls *cls, struct dpcls_rule *rule, 
+        struct dpcls_subtable *subtable)
+{
+    //FIXME:only prunning on dst
+
+    ovs_be32 nw_dst_mask = MINIFLOW_GET_U32(&rule->mask->mf, nw_dst);
+    ovs_be32 nw_dst = MINIFLOW_GET_U32(&rule->flow.mf, nw_dst);
+
+    if(nw_dst_mask) {
+        uint32_t prefix_len = count_1bits(nw_dst_mask);
+        uint32_t prefix = ntohl(nw_dst & nw_dst_mask);
+        struct tbm_trie_leaf *leaf;
+
+        if(!(tbm_prefix_exist(&cls->trie, prefix, prefix_len))) {
+            leaf = xmalloc(sizeof *leaf);
+            tbm_trie_leaf_init(leaf);
+
+            tbm_insert_prefix(&cls->trie, prefix, prefix_len, leaf); 
+
+        } else {
+            leaf = (struct tbm_trie_leaf *)
+                tbm_search(&cls->trie, prefix);
+
+            struct trie_subtable *iter;
+            PVECTOR_FOR_EACH(iter, &leaf->subtables) {
+                if(iter->subtable == subtable) {
+                    iter->rule_cnt ++;
+                    return;
+                }
+            }
+            //Otherwise, need to add this subtable
+        }
+
+        struct trie_subtable *t_sub = xmalloc(sizeof *t_sub);
+        trie_subtable_init(t_sub);
+        t_sub->subtable = subtable;
+        t_sub->rule_cnt ++;
+
+        pvector_insert(&leaf->subtables, t_sub, 0);
+        pvector_publish(&leaf->subtables);
+	VLOG_WARN("pvector(&leaf->subtables) %d\n", pvector_count(&leaf->subtables));
+    }
+
+    struct tbm_trie_stat stat;
+    memset(&stat, 0, sizeof stat);
+    stat.min_table = 0xff;
+    tbm_trie_get_stat(&cls->trie, &stat);
+    double avg_tbl = (double)stat.table_total / stat.prefix_cnt;
+    VLOG_WARN("Trie pruning: prefix %u, min_table %u, max_table %u, avg_table %.2f\n",
+            stat.prefix_cnt, stat.min_table, stat.max_table, avg_tbl);
+}
+
 /* Insert 'rule' into 'cls'. */
 static void
 dpcls_insert(struct dpcls *cls, struct dpcls_rule *rule,
@@ -3805,7 +3972,45 @@ dpcls_insert(struct dpcls *cls, struct dpcls_rule *rule,
     struct dpcls_subtable *subtable = dpcls_find_subtable(cls, mask);
 
     rule->mask = &subtable->mask;
+    trie_prune_insert(cls, rule, subtable);
     cmap_insert(&subtable->rules, &rule->cmap_node, rule->flow.hash);
+}
+
+static void
+trie_prune_remove(struct dpcls *cls, struct dpcls_rule *rule)
+{
+    ovs_be32 nw_dst_mask = MINIFLOW_GET_U32(&rule->mask->mf, nw_dst);
+    ovs_be32 nw_dst = MINIFLOW_GET_U32(&rule->flow.mf, nw_dst);
+
+    if(nw_dst_mask) {
+        uint32_t prefix_len = count_1bits(nw_dst_mask);
+        uint32_t prefix = ntohl(nw_dst & nw_dst_mask);
+        if(tbm_prefix_exist(&cls->trie, prefix, prefix_len)) {
+            struct dpcls_subtable *subtable;
+            INIT_CONTAINER(subtable, rule->mask, mask);
+
+            struct tbm_trie_leaf *leaf = tbm_search(&cls->trie, prefix);
+            struct trie_subtable *iter;
+            PVECTOR_FOR_EACH(iter, &leaf->subtables) {
+                if(iter->subtable == subtable) {
+                    iter->rule_cnt --;
+                    break;
+                }
+            }
+
+            if(iter->rule_cnt == 0) {
+                pvector_remove(&leaf->subtables, iter);
+                pvector_publish(&leaf->subtables);
+                trie_subtable_uinit(iter);
+            }
+
+            if(pvector_count(&leaf->subtables) == 0) {
+                /*then we have to remove the leaf and the prefixes*/
+                tbm_delete_prefix(&cls->trie, prefix, prefix_len, NULL);
+                tbm_trie_leaf_uinit(leaf);
+            }
+        }
+    }
 }
 
 /* Removes 'rule' from 'cls', also destructing the 'rule'. */
@@ -3816,6 +4021,7 @@ dpcls_remove(struct dpcls *cls, struct dpcls_rule *rule)
 
     ovs_assert(rule->mask);
 
+    trie_prune_remove(cls, rule);
     INIT_CONTAINER(subtable, rule->mask, mask);
 
     if (cmap_remove(&subtable->rules, &rule->cmap_node, rule->flow.hash)
