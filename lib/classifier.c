@@ -1797,9 +1797,9 @@ fill_range_wc(const struct cls_subtable *subtable, struct flow_wildcards *wc,
 static inline ovs_be32 u32_normalize(ovs_be32 mask)
 {
     if(mask) {
-	ovs_be32 tmp = 0;
+        ovs_be32 tmp = 0;
         tmp = (UINT32_MAX << (rightmost_1bit_idx(ntohl(mask))));
-	return mask | htonl(tmp);
+        return mask | htonl(tmp);
     }
     return mask;
 }
@@ -1807,9 +1807,9 @@ static inline ovs_be32 u32_normalize(ovs_be32 mask)
 static inline ovs_be16 u16_normalize(ovs_be16 mask)
 {
     if(mask) {
-	ovs_be16 tmp = 0;
+        ovs_be16 tmp = 0;
         tmp = (UINT16_MAX << (rightmost_1bit_idx(ntohs(mask))));
-	return mask | htons(tmp);
+        return mask | htons(tmp);
     }
     return mask;
 }

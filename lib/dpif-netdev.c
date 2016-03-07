@@ -3952,7 +3952,7 @@ static void trie_prune_insert(struct dpcls *cls, struct dpcls_rule *rule,
 
         pvector_insert(&leaf->subtables, t_sub, 0);
         pvector_publish(&leaf->subtables);
-	VLOG_WARN("pvector(&leaf->subtables) %d\n", pvector_count(&leaf->subtables));
+        //VLOG_WARN("pvector(&leaf->subtables) %ld\n", pvector_count(&leaf->subtables));
     }
 
     struct tbm_trie_stat stat;
@@ -4051,6 +4051,71 @@ dpcls_rule_matches_key(const struct dpcls_rule *rule,
     return true;
 }
 
+static bool trie_prune_lookup(const struct dpcls *cls, const struct netdev_flow_key *keys,
+        uint16_t *maps, struct dpcls_rule **rules, const size_t cnt)
+{
+#define MAP_BITS 16
+    struct tbm_trie_leaf *leaves[cnt]; 
+    memset(leaves, 0x00, sizeof(struct tbm_trie_leaf*) * cnt);
+    uint32_t ips[cnt];
+    memset(ips, 0x00, sizeof ips);
+
+    struct trie_subtable *iter;
+    struct tbm_trie_leaf *leaf; 
+    struct dpcls_subtable *subtable;
+    struct dpcls_rule *rule;
+    uint32_t hash;
+    uint32_t remains = 0;
+
+    //for each key, first find its leaf
+    int m = 0;
+    for(; m < cnt; m++) {
+        ips[m] = MINIFLOW_GET_U32(&keys[m].mf, nw_dst);
+        ips[m] = ntohl(ips[m]);
+    }
+
+    for(m = 0; m < (int)(cnt - TBM_V4_BATCH); m += TBM_V4_BATCH) {
+        tbm_search_batch((struct tbm_trie *)(&cls->trie), 
+                         ips + m, (void*)(leaves + m), TBM_V4_BATCH);
+    }
+
+    tbm_search_batch((struct tbm_trie *)(&cls->trie), 
+                     ips + m, (void*)(leaves + m), cnt - m);
+
+    //for each leaves, check the keys separately
+    for(m = 0; m < cnt; m ++) {
+        if(!leaves[m]) {
+            continue;
+        }
+
+        leaf = leaves[m];
+        PVECTOR_FOR_EACH(iter, &leaf->subtables) {
+            subtable = iter->subtable;
+            hash = netdev_flow_key_hash_in_mask(&keys[m], 
+                                                &subtable->mask);
+            
+            CMAP_FOR_EACH_WITH_HASH(rule, cmap_node, 
+                                    hash, &subtable->rules) {
+                if(dpcls_rule_matches_key(rule, &keys[m])) {
+                    rules[m] = rule;
+                    maps[m / MAP_BITS] &= ~(1 << (m % MAP_BITS));
+                    goto next_key;
+                }
+            }
+        }
+next_key:
+        ;
+    }
+
+    for (m = 0; m < cnt; m+= MAP_BITS) {
+        remains |= maps[m / MAP_BITS];
+    }
+
+    return remains;
+
+#undef MAP_BITS
+}
+
 /* For each miniflow in 'flows' performs a classifier lookup writing the result
  * into the corresponding slot in 'rules'.  If a particular entry in 'flows' is
  * NULL it is skipped.
@@ -4082,6 +4147,11 @@ dpcls_lookup(const struct dpcls *cls, const struct netdev_flow_key keys[],
         maps[N_MAPS - 1] >>= MAP_BITS - cnt % MAP_BITS; /* Clear extra bits. */
     }
     memset(rules, 0, cnt * sizeof *rules);
+
+    bool any_miss = trie_prune_lookup(cls, keys, maps, rules, cnt);
+    if(!any_miss) {
+        return true;
+    }
 
     PVECTOR_FOR_EACH (subtable, &cls->subtables) {
         const struct netdev_flow_key *mkeys = keys;

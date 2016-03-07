@@ -5,6 +5,41 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without warranty of any kind.
 
+#lib_LTLIBRARIES += lib/libfib.la
+#
+#lib_libfib_la_LDFLAGS = \
+#        -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+#        -Wl,--version-script=$(top_builddir)/lib/libfib.sym \
+#        $(AM_LDFLAGS)
+#
+#lib_libfib_la_SOURCES = \
+#	lib/fiblib/bitmap.h \
+#	lib/fiblib/bitmap_v4.h \
+#	lib/fiblib/bitmap_v6.h \
+#	lib/fiblib/list.h \
+#	lib/fiblib/mb_node.h \
+#	lib/fiblib/mm.h \
+#	lib/fiblib/mm_color.h \
+#	lib/fiblib/bitmap.c \
+#	lib/fiblib/bitmap_v4.c \
+#	lib/fiblib/bitmap_v6.c 
+#	
+#	
+#lib_LTLIBRARIES += lib/libtbm.la
+#
+#lib_libtbm_la_LDFLAGS = \
+#        -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+#        -Wl,--version-script=$(top_builddir)/lib/libtbm.sym \
+#        $(AM_LDFLAGS)
+#
+#lib_libtbm_la_SOURCES = \
+#	lib/tbm/tbm.h \
+#	lib/tbm/tbmv4.h \
+#	lib/tbm/tbmv6.h \
+#	lib/tbm/tbmv4.c \
+#	lib/tbm/tbmv6.c 
+#	
+#
 lib_LTLIBRARIES += lib/libopenvswitch.la
 
 lib_libopenvswitch_la_LIBADD = $(SSL_LIBS)
@@ -281,7 +316,22 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/lldp/lldpd.c \
 	lib/lldp/lldpd.h \
 	lib/lldp/lldpd-structs.c \
-	lib/lldp/lldpd-structs.h
+	lib/lldp/lldpd-structs.h \
+	lib/fiblib/bitmap.c \
+	lib/fiblib/bitmap.h \
+	lib/fiblib/bitmap_v4.c \
+	lib/fiblib/bitmap_v4.h \
+	lib/fiblib/bitmap_v6.c \
+	lib/fiblib/bitmap_v6.h \
+	lib/fiblib/mb_node.c \
+	lib/fiblib/mb_node.h \
+	lib/fiblib/mm.c \
+	lib/fiblib/mm.h \
+	lib/tbm/tbm.h \
+	lib/tbm/tbmv4.h \
+	lib/tbm/tbmv6.h \
+	lib/tbm/tbmv4.c \
+	lib/tbm/tbmv6.c 
 
 if WIN32
 lib_libopenvswitch_la_SOURCES += \
@@ -299,6 +349,7 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/signals.h \
 	lib/socket-util-unix.c \
 	lib/stream-unix.c
+	
 endif
 
 EXTRA_DIST += \
